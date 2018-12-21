@@ -68,11 +68,11 @@ class AssetFilesManager
             throw new \InvalidArgumentException('Asset file type "' . $sAssetFileType . '" is not valid');
         }
 
-        //Production
+        // Production
         if ($this->getOptions()->isProduction()) {
             $oAssetFilesCacheManager = $this->getAssetFilesCacheManager();
 
-            //Production cached asset files do not exist
+            // Production cached asset files do not exist
             if (!$oAssetFilesCacheManager->hasProductionCachedAssetFiles($sAssetFileType)) {
                 switch ($sAssetFileType) {
                     case \AssetsBundle\AssetFile\AssetFile::ASSET_JS:
@@ -86,16 +86,16 @@ class AssetFilesManager
                 }
             }
             return $oAssetFilesCacheManager->getProductionCachedAssetFiles($sAssetFileType);
-        } //Development
-        else {
-            switch ($sAssetFileType) {
-                case \AssetsBundle\AssetFile\AssetFile::ASSET_JS:
-                    return $this->cacheJsAssetFiles();
-                case \AssetsBundle\AssetFile\AssetFile::ASSET_CSS:
-                    return $this->cacheCssAssetFiles();
-                default:
-                    throw new \DomainException('Only "' . \AssetsBundle\AssetFile\AssetFile::ASSET_JS . '" & "' . \AssetsBundle\AssetFile\AssetFile::ASSET_CSS . '" assets file type can be retrieved');
-            }
+        }
+
+         // Development
+        switch ($sAssetFileType) {
+            case \AssetsBundle\AssetFile\AssetFile::ASSET_JS:
+                return $this->cacheJsAssetFiles();
+            case \AssetsBundle\AssetFile\AssetFile::ASSET_CSS:
+                return $this->cacheCssAssetFiles();
+            default:
+                throw new \DomainException('Only "' . \AssetsBundle\AssetFile\AssetFile::ASSET_JS . '" & "' . \AssetsBundle\AssetFile\AssetFile::ASSET_CSS . '" assets file type can be retrieved');
         }
     }
 
@@ -110,7 +110,7 @@ class AssetFilesManager
         // Cache media asset files
         $this->cacheMediaAssetFiles();
 
-        if ($bIsProduction = $this->getOptions()->isProduction()) {
+        if ($this->getOptions()->isProduction()) {
             // Retrieve asset file filters manager
             $oAssetFileFiltersManager = $this->getAssetFileFiltersManager();
 
@@ -120,14 +120,14 @@ class AssetFilesManager
             // Create tmp asset file
             $oTmpAssetFile = $this->createTmpAssetFile(\AssetsBundle\AssetFile\AssetFile::ASSET_CSS);
 
-            // Callback for url rewriting
-            $oRewriteUrlCallback = array($this, 'rewriteUrl');
-
             // Merge less asset files
             foreach ($this->cacheLessAssetFiles() as $oAssetFile) {
-                $oTmpAssetFile->setAssetFileContents(preg_replace_callback('/url\(([^\)]+)\)/', function ($aMatches) use ($oAssetFile, $oRewriteUrlCallback) {
-                            return call_user_func($oRewriteUrlCallback, $aMatches, $oAssetFile);
-                }, $oCssFileFilter ? $oCssFileFilter->filterAssetFile($oAssetFile) : $oAssetFile->getAssetFileContents()) . PHP_EOL);
+                $oTmpAssetFile->setAssetFileContents($this->rewriteAssetFileUrls(
+                    // File content
+                    $oCssFileFilter ? $oCssFileFilter->filterAssetFile($oAssetFile) : $oAssetFile->getAssetFileContents(),
+                    // Current asset file
+                    $oAssetFile
+                ). PHP_EOL);
 
                 // Remove temp less asset file
                 \Zend\Stdlib\ErrorHandler::start();
@@ -137,24 +137,33 @@ class AssetFilesManager
 
             // Merge css asset files
             foreach ($this->getAssetFilesConfiguration()->getAssetFiles(\AssetsBundle\AssetFile\AssetFile::ASSET_CSS) as $oAssetFile) {
-                $oTmpAssetFile->setAssetFileContents(preg_replace_callback('/url\(([^\)]+)\)/', function ($aMatches) use ($oAssetFile, $oRewriteUrlCallback) {
-                            return call_user_func($oRewriteUrlCallback, $aMatches, $oAssetFile);
-                }, $oCssFileFilter ? $oCssFileFilter->filterAssetFile($oAssetFile) : $oAssetFile->getAssetFileContents()) . PHP_EOL);
+                $oTmpAssetFile->setAssetFileContents($this->rewriteAssetFileUrls(
+                    // File content
+                    $oCssFileFilter ? $oCssFileFilter->filterAssetFile($oAssetFile) : $oAssetFile->getAssetFileContents(),
+                    // Current asset file
+                    $oAssetFile
+                ) . PHP_EOL);
             }
 
-            return array($this->getAssetFilesCacheManager()->cacheAssetFile($oTmpAssetFile));
-        } else {
-            // Cache less asset files
-            $aAssetFiles = $this->cacheLessAssetFiles();
+             // Cache asset file if not empty
+            if($oTmpAssetFile->getAssetFileSize()){
+                return array($this->getAssetFilesCacheManager()->cacheAssetFile($oTmpAssetFile));
+            }
+            return array();
+        }
 
-            // Retrieve asset files cache manager
-            $oAssetFilesCacheManager = $this->getAssetFilesCacheManager();
-            foreach ($this->getAssetFilesConfiguration()->getAssetFiles(\AssetsBundle\AssetFile\AssetFile::ASSET_CSS) as $oAssetFile) {
-                // Cache asset file
+        // Cache less asset files
+        $aAssetFiles = $this->cacheLessAssetFiles();
+
+        // Retrieve asset files cache manager
+        $oAssetFilesCacheManager = $this->getAssetFilesCacheManager();
+        foreach ($this->getAssetFilesConfiguration()->getAssetFiles(\AssetsBundle\AssetFile\AssetFile::ASSET_CSS) as $oAssetFile) {
+            // Cache asset file if not empty
+            if($oAssetFile->getAssetFileSize()){
                 $aAssetFiles[] = $oAssetFilesCacheManager->cacheAssetFile($oAssetFile);
             }
-            return $aAssetFiles;
         }
+        return $aAssetFiles;
     }
 
     /**
@@ -193,7 +202,16 @@ class AssetFilesManager
             if ($iAssetFileCachedFilemtime && $bIsUpdated) {
                 $bIsUpdated = $iAssetFileCachedFilemtime >= $oAssetFile->getAssetFileLastModified();
             }
-            $oTmpAssetFile->setAssetFileContents('@import "' . str_replace(array(getcwd(), DIRECTORY_SEPARATOR), array('', '/'), $oAssetFile->getAssetFilePath()) . '";' . PHP_EOL);
+            // If less asset file is a php file, retrieve its content and add it as final less file content
+            if ($oAssetFile->getAssetFileExtension() === 'php') {
+                $sLessContent = $oAssetFile->getAssetFileContents();
+            }
+            // Else import it in final less file
+            else {
+                $sLessContent = '@import "' . str_replace(array(getcwd(), DIRECTORY_SEPARATOR), array('', '/'), $oAssetFile->getAssetFilePath()) . '";';
+            }
+
+            $oTmpAssetFile->setAssetFileContents($sLessContent . PHP_EOL);
         }
         \Zend\Stdlib\ErrorHandler::stop(true);
 
@@ -208,8 +226,12 @@ class AssetFilesManager
         // Set new content to temp asset file contents
         $oTmpAssetFile->setAssetFileContents($sAssetFileFilteredContent, false);
 
-        // Development need to cache less asset file
-        return array($this->getAssetFilesCacheManager()->cacheAssetFile($oTmpAssetFile)->setAssetFileType(\AssetsBundle\AssetFile\AssetFile::ASSET_CSS));
+        // Development need to cache less asset file if not empty
+        if($oTmpAssetFile->getAssetFileSize()){
+            return array($this->getAssetFilesCacheManager()->cacheAssetFile($oTmpAssetFile)->setAssetFileType(\AssetsBundle\AssetFile\AssetFile::ASSET_CSS));
+        }
+
+        return array();
     }
 
     /**
@@ -219,12 +241,11 @@ class AssetFilesManager
      */
     protected function cacheJsAssetFiles()
     {
-
-        if ($bIsProduction = $this->getOptions()->isProduction()) {
-            //Retrieve asset file filters manager
+        if ($this->getOptions()->isProduction()) {
+            // Retrieve asset file filters manager
             $oAssetFileFiltersManager = $this->getAssetFileFiltersManager();
 
-            //Retrieve Js asset file filter if available
+            // Retrieve Js asset file filter if available
             $oJsFileFilter = $oAssetFileFiltersManager->has(\AssetsBundle\AssetFile\AssetFile::ASSET_JS) ? $oAssetFileFiltersManager->get(\AssetsBundle\AssetFile\AssetFile::ASSET_JS) : null;
 
             // Create tmp asset file
@@ -234,17 +255,22 @@ class AssetFilesManager
                 $sAssetFileContent = $oJsFileFilter ? $oJsFileFilter->filterAssetFile($oAssetFile) : $oAssetFile->getAssetFileContents();
                 $oTmpAssetFile->setAssetFileContents($sAssetFileContent . PHP_EOL);
             }
-            return array($this->getAssetFilesCacheManager()->cacheAssetFile($oTmpAssetFile));
-        } else {
-            //Retrieve asset files cache manager
-            $oAssetFilesCacheManager = $this->getAssetFilesCacheManager();
-            $aAssetFiles = array();
-            foreach ($this->getAssetFilesConfiguration()->getAssetFiles(\AssetsBundle\AssetFile\AssetFile::ASSET_JS) as $oAssetFile) {
-                //Cache asset file
+            if($oTmpAssetFile->getAssetFileSize()){
+                return array($this->getAssetFilesCacheManager()->cacheAssetFile($oTmpAssetFile));
+            }
+            return array();
+        }
+
+        // Retrieve asset files cache manager
+        $oAssetFilesCacheManager = $this->getAssetFilesCacheManager();
+        $aAssetFiles = array();
+        foreach ($this->getAssetFilesConfiguration()->getAssetFiles(\AssetsBundle\AssetFile\AssetFile::ASSET_JS) as $oAssetFile) {
+            // Cache asset file if not empty
+            if($oAssetFile->getAssetFileSize()){
                 $aAssetFiles[] = $oAssetFilesCacheManager->cacheAssetFile($oAssetFile);
             }
-            return $aAssetFiles;
         }
+        return $aAssetFiles;
     }
 
     /**
@@ -292,6 +318,20 @@ class AssetFilesManager
         }
 
         return $aAssetFiles;
+    }
+
+    /**
+     * Rewrite url of an asset file content to match with cache path if needed
+     * @param string $sAssetFileContent
+     * @param \AssetsBundle\AssetFile\AssetFile $oAssetFile
+     * @return string
+     */
+    public function rewriteAssetFileUrls($sAssetFileContent, \AssetsBundle\AssetFile\AssetFile $oAssetFile){
+        // Callback for url rewriting
+        $oRewriteUrlCallback = array($this, 'rewriteUrl');
+        return preg_replace_callback('/url\(([^\)]+)\)/', function ($aMatches) use ($oAssetFile, $oRewriteUrlCallback) {
+            return call_user_func($oRewriteUrlCallback, $aMatches, $oAssetFile);
+        }, $sAssetFileContent);
     }
 
     /**
