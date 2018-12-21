@@ -1,5 +1,5 @@
 {
-    "name": "neilime/zf2-assets-bundle",
+    "name": "chielsen/zf2-assets-bundle",
     "type": "library",
     "description": "Zend Framework module that provides assets bundling / caching",
     "keywords": ["assets", "bundle", "cache", "zf2","zend framework", "css", "js", "less"],
@@ -34,7 +34,7 @@
         "zendframework/zend-log": "2.*@stable",
         "zendframework/zend-i18n": "2.*@stable",
         "oyejorge/less.php": "1.*@stable",
-        "mrclay/minify": "2.*@stable",
+        "mrclay/minify": "3.*@stable",
         "tedivm/jshrink": "1.*@stable"
     },
     "require-dev": {
